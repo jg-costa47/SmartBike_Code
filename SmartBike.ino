@@ -45,6 +45,9 @@ DHT dht(DHTPIN, DHTTYPE);
 #define PINO_ECHO3      4
 #define VELOCIDADE_SOM_1   331.4
 #define VELOCIDADE_SOM_2   0.034
+//#define LEITURA_OBJETOS_LONGE 5
+
+#define OBJETO_DETETADO  2000 // duração do sinal do buzzer
 
 NewPing sonar(PINO_TRIGGER, PINO_ECHO, DISTANCIA_MAXIMA);
 NewPing sonar3(PINO_TRIGGER3, PINO_ECHO3, DISTANCIA_MAXIMA);
@@ -75,15 +78,18 @@ int iteracoes_aux = 10;
 bool dhtOperacional = false;
 
 bool acidenteAtivo = false;
+unsigned long detecao_Acidente = 0;
+
 bool buzzerAtivo = false;
 
-unsigned long contadorOFF = 0;
 bool estadoMudou_SW520 = false;
 bool ultimoEstado_SW520 = LOW;
 
 bool permitirAcidente = true; 
 
-bool objetoDetetado = false; // Variável para controlar a detecção de objeto a 1 metro e meio (30 cm na DEMO)
+bool objetoDetetadoAnterior = false;
+unsigned long tempoInicial = 0; //Timer Obj entre os 100 e os 300 metros
+
 
 float som_ms;
 float som_cm;
@@ -108,7 +114,7 @@ void tarefaBluetooth(void* parametro);
 
 // Funções Auxiliares  das tarefas
 void acionarAcaoAcidente();
-void atualizaContador();
+void atualizaDetecaoAcidente();
 float validarDistancia(float distancia);
 void interrupcaoAcidente();
 void IRAM_ATTR interrupcaoBotao(); 
@@ -176,7 +182,7 @@ void setup() {
 //____________________________________________________________________________
 
 void loop() { // Loop Auxiliar 
-  /*
+  
   int sensorValue = digitalRead(SW520_PINO);
   duracao_aux = sonar_aux.ping_median(iteracoes_aux);
   distancia_cm_aux = duracao_aux * VELOCIDADE_SOM_2 / 2;
@@ -191,7 +197,6 @@ void loop() { // Loop Auxiliar
 
   Serial.print("Humididade: ");
   Serial.println(humidade_aux);
-  */
   /*
   if (sensorValue == HIGH) { 
       Serial.println("ON-State");
@@ -201,13 +206,25 @@ void loop() { // Loop Auxiliar
       Serial.println("OFF-State");
       delay(500);
   }
-
+  */
   Serial.println(distancia_cm_aux);
   Serial.println(distancia_cm_aux3);
   delay(500);
-  */
+  
 
 }
+/*
+____________________________________________________________________________ 
+                                      NOTAS
+____________________________________________________________________________ 
+Objeto detetado 1 metro e meio -> DEMO 30 cm 
+    - (Envio de apenas uma mensagem)
+
+Objeto entre 1 metro e 20 cm -> DEMO 20 cm e 10 cm 
+    - (Envio consecutivo de mensagens com o valor da distância)
+____________________________________________________________________________ 
+*/
+
 
 //____________________________________________________________________________  
 //--------------------------- Deteção Obstáculo -----------------------------   
@@ -220,11 +237,22 @@ float validarDistancia(float distancia) {
   return distancia;
 }
 
+// Função para calcular a média de uma lista de inteiros
+float calculaMediaDistancia(int listaObjetos[], int leituras) {
+  int total = 0;
+  for (int i = 0; i < leituras; i++) {
+    total += listaObjetos[i];
+  }
+  return (float)total / leituras;
+}
+
+
 
 void tarefaHCSR04(void* parametro) {
   static float duracao;
   static float duracao3;
   static int iteracoes = 10;
+
   while (1) {
     if (!acidenteAtivo){
       // Calcular a distância
@@ -240,37 +268,37 @@ void tarefaHCSR04(void* parametro) {
         distancia_cm1 = duracao * VELOCIDADE_SOM_2 / 2;
         distancia_cm3 = duracao3 * VELOCIDADE_SOM_2 / 2;
       }
-      
-      if (validarDistancia) {
-          distancia_cm1 = validarDistancia(distancia_cm1);
-          distancia_cm3 = validarDistancia(distancia_cm3);
-      }
-      
-      if ((distancia_cm1 > 10 && distancia_cm1 <= 30) || (distancia_cm3 > 10 && distancia_cm3 <= 30)) { //Objeto Proximo - envio de mensagens consecutivas para a APP 
-        objetoDetetado = true;        
-      } else {
-        objetoDetetado = false;
-      }
+      distancia_cm1 = validarDistancia(distancia_cm1);
+      distancia_cm3 = validarDistancia(distancia_cm3);
 
-      // Atraso entre as medições
-      vTaskDelay(pdMS_TO_TICKS(500));
-    } else {
+      float menorDistanciaObj = min(distancia_cm1, distancia_cm3);
+
+
+      if ((menorDistanciaObj > 100) && (menorDistanciaObj < 300)){
+        if (!objetoDetetadoAnterior){
+          tempoInicial = millis();
+          objetoDetetadoAnterior = true;
+        }else{
+          if (millis() - tempoInicial >= 5000){
+              digitalWrite(BUZZER_PINO, HIGH); // Ativar o buzzer
+              vTaskDelay(pdMS_TO_TICKS(150));
+              digitalWrite(BUZZER_PINO, LOW); // Desativar o buzzer
+              objetoDetetadoAnterior = false;
+            }
+        }
+      }
+      else{
+        objetoDetetadoAnterior = false;
+      }
+      // Atraso entre as mediCOes
+      vTaskDelay(pdMS_TO_TICKS(300));
+    }else {
       vTaskSuspend(NULL); // Colocar a tarefa em standby durante a interrupção
     }
   }
 }
 
-/*
-____________________________________________________________________________ 
-                                      NOTAS
-____________________________________________________________________________ 
-Objeto detetado 1 metro e meio -> DEMO 30 cm 
-    - (Envio de apenas uma mensagem)
 
-Objeto entre 1 metro e 20 cm -> DEMO 20 cm e 10 cm 
-    - (Envio consecutivo de mensagens com o valor da distância)
-____________________________________________________________________________ 
-*/
 
 // Determinar a velocidade do som calibrada pela Temperatura e Humidade.
 void tarefaDHT11(void* parametro) {
@@ -292,7 +320,7 @@ void tarefaDHT11(void* parametro) {
         dhtOperacional = false;
       }
       // Atraso entre as medições
-      vTaskDelay(pdMS_TO_TICKS(500));
+      vTaskDelay(pdMS_TO_TICKS(200));
     } else {
       vTaskSuspend(NULL); // Colocar a tarefa em standby durante a interrupção
     }
@@ -309,8 +337,8 @@ void acionarAcaoAcidente() {
   digitalWrite(BUZZER_PINO, HIGH); // Ativar o buzzer
 }
 
-void atualizaContador() {
-  contadorOFF = millis();
+void atualizaDetecaoAcidente() {
+  detecao_Acidente = millis();
 }
 
 void tarefaSW520(void* parametro) {
@@ -322,17 +350,17 @@ void tarefaSW520(void* parametro) {
       ultimoEstado_SW520 = sensorSW520;
       estadoMudou_SW520 = true;
       if (sensorSW520 == HIGH) {
-        atualizaContador();
+        atualizaDetecaoAcidente();
       }
     }
 
-    if (sensorSW520 == HIGH && millis() - contadorOFF >= 10000 && estadoMudou_SW520) {
+    if (sensorSW520 == HIGH && millis() - detecao_Acidente >= 10000 && estadoMudou_SW520) {
       acionarAcaoAcidente();
       
       estadoMudou_SW520 = false;
     } else if (sensorSW520 == LOW) {
       estadoMudou_SW520 = false;
-      atualizaContador();
+      atualizaDetecaoAcidente();
     }
 
     vTaskDelay(pdMS_TO_TICKS(10)); // Pequeno atraso para evitar polling excessivo
@@ -350,7 +378,7 @@ void interrupcaoAcidente() {
     acidenteAtivo = false;
     buzzerAtivo = false;
     digitalWrite(BUZZER_PINO, LOW);
-    atualizaContador();
+    atualizaDetecaoAcidente();
     vTaskResume(tarefaHCSR04Handle);
     vTaskResume(tarefaDHT11Handle);
     permitirAcidente = true; // Permitir novo acionamento do acidente
@@ -368,22 +396,19 @@ void tarefaBluetooth(void* parametro) {
   while (1) {
      
     if (!acidenteAtivo) {
-      String valores = "";
-      // Enviar os valores resultantes via Bluetooth
-      if (dhtOperacional) {
-        // Menor distância entre os sensores de ultrassom
-        float menorDistancia = min(distancia_cm1, distancia_cm3);
-        if (menorDistancia <= 20){ // Objeto detetado a menos de 1 metro (Na demo 20 cm) -> envio dos dados consecutivos da distância.
-          valores += "Distância: " + String(menorDistancia) + " cm" + "\n";
-        }
+      String valores = ""; 
+      float menorDistancia = min(distancia_cm1, distancia_cm3);
+      if (menorDistancia <= 20){ // Objeto detetado a menos de 1 metro (Na demo 20 cm) -> envio dos dados consecutivos da distância.
+        valores += "Distância: " + String(menorDistancia) + " cm" + "\n";
+    
       }
 
-      if (objetoDetetado && !mensagemObjetoDetetado) { // Envio da mensagem Objeto detetado.
-        SerialBT.println("Objeto detectado a pelo menos 1 metro e meio.");
+      if (objetoDetetadoAnterior && !mensagemObjetoDetetado) { // Envio da mensagem Objeto detetado.
+        SerialBT.println("Objeto detectado a pelo menos 1 metro.");
         mensagemObjetoDetetado = true;
       }
 
-      if (!objetoDetetado && mensagemObjetoDetetado) { //evitar mensagens em duplicado
+      if (!objetoDetetadoAnterior && mensagemObjetoDetetado) { //evitar mensagens em duplicado
         mensagemObjetoDetetado = false;
       }
 
@@ -407,13 +432,13 @@ void tarefaBluetooth(void* parametro) {
           acidenteAtivo = false;
           buzzerAtivo = false;
           digitalWrite(BUZZER_PINO, LOW);
-          atualizaContador();
+          atualizaDetecaoAcidente();
           vTaskResume(tarefaHCSR04Handle);
           vTaskResume(tarefaDHT11Handle);
           permitirAcidente = true; // Permitir novo acionamento do acidente
         }
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(1000));  // Atraso entre as mensagens
+    vTaskDelay(pdMS_TO_TICKS(200));  // Atraso entre as mensagens
   }
 }
