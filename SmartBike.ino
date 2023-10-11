@@ -16,6 +16,8 @@
 #error Bluetooth Serial não está disponível. A conexão apenas está disponível no ESP32.
 #endif
 
+bool emparelhado = false;
+
 //____________________________________________________________________________  
 //------------------------------ Definição DHT11 ---------------------------- 
 //____________________________________________________________________________
@@ -99,6 +101,70 @@ float som_cm;
 //____________________________________________________________________________
 
 BluetoothSerial SerialBT;
+bool LigacaoBluetoothEstabelecida = false;
+bool aguardaConectar = true;
+
+bool Conectar_SmartBike() {
+  bool senhaRequerida = false;
+
+  while (true) {
+    if (aguardaConectar) {
+      SerialBT.println("Pretende iniciar um novo ride de SmartBike? Selecione: 'Conectar'");
+      aguardaConectar = false;
+      delay(2000);
+    }
+
+    if (SerialBT.available()) {
+      String conectar = SerialBT.readStringUntil('\n');
+      conectar.trim();
+
+      if (conectar.equals("conectar")) {
+        SerialBT.println("Pretende começar um ride de SmartBike? ('Sim' | 'Não')");
+        while (true) {
+          while (SerialBT.available() == 0) {
+            // Aguarda pela mensagem do ciclista
+          }
+
+          String resposta = SerialBT.readStringUntil('\n');
+          resposta.trim();
+
+          if (resposta.equals("Sim")) {
+            if (!senhaRequerida) {
+              SerialBT.println("SmartBike Password: ****");
+              senhaRequerida = true;
+              delay(2000);
+            }
+
+            while (true) {
+              while (SerialBT.available() == 0) {
+                // Aguarda até que a password seja introduzida
+              }
+
+              String password_SmartBike = SerialBT.readStringUntil('\n');
+              password_SmartBike.trim();
+
+              if (password_SmartBike.equals("1234")) {
+                SerialBT.println("Password correta. Boa viagem de SmartBike!");
+                delay(2000);
+                return true; // Início da viagem de Smartbike.
+              } else {
+                SerialBT.println("Password incorreta.");
+                SerialBT.println("SmartBike Password: ****");
+              }
+            }
+          } else if (resposta.equals("Não")) {
+            SerialBT.println("Obrigado pela experiência na SmartBike.");
+              delay(3000);
+
+            // Desconectar a ligação por Bluetooth com a App
+            return false;
+          }
+        }
+      }
+    }
+  }
+  return false; // Password incorreta
+}
 
 // Manipuladores das tarefa
 TaskHandle_t tarefaHCSR04Handle;
@@ -119,6 +185,7 @@ float validarDistancia(float distancia);
 void interrupcaoAcidente();
 void IRAM_ATTR interrupcaoBotao(); 
 
+
 //____________________________________________________________________________  
 //--------------------------------- SET-UP ----------------------------------   
 //____________________________________________________________________________
@@ -126,6 +193,9 @@ void IRAM_ATTR interrupcaoBotao();
 void setup() {
   Serial.begin(115200);
   SerialBT.begin("ESP32_Gikabala"); 
+  Serial.println("------------------Loading Bluetooth.");
+
+  LigacaoBluetoothEstabelecida = Conectar_SmartBike(); // Verificar password da SmartBike
   dht.begin();
 
   // Criar tarefas
@@ -182,36 +252,51 @@ void setup() {
 //____________________________________________________________________________
 
 void loop() { // Loop Auxiliar 
-  
-  int sensorValue = digitalRead(SW520_PINO);
-  duracao_aux = sonar_aux.ping_median(iteracoes_aux);
-  distancia_cm_aux = duracao_aux * VELOCIDADE_SOM_2 / 2;
-  duracao_aux3 = sonar_aux3.ping_median(iteracoes_aux);
-  distancia_cm_aux3 = duracao_aux3 * VELOCIDADE_SOM_2 / 2;
-  
-  humidade_aux = dht.readHumidity();
-  temperatura_aux = dht.readTemperature();
 
-  Serial.print("Temperatura: ");
-  Serial.print(temperatura_aux);
-
-  Serial.print("Humididade: ");
-  Serial.println(humidade_aux);
-  /*
-  if (sensorValue == HIGH) { 
-      Serial.println("ON-State");
-
-      delay(500);
+  if (!LigacaoBluetoothEstabelecida) {
+    aguardaConectar = true; // Conectar novamente 
+    LigacaoBluetoothEstabelecida = false;
+    
   } else {
-      Serial.println("OFF-State");
-      delay(500);
+    LigacaoBluetoothEstabelecida = true;
+    LigacaoBluetoothEstabelecida = Conectar_SmartBike(); // Inicia a função de conexão
   }
-  */
-  Serial.println(distancia_cm_aux);
-  Serial.println(distancia_cm_aux3);
-  delay(500);
-  
 
+  if (LigacaoBluetoothEstabelecida) {
+
+
+    int sensorValue = digitalRead(SW520_PINO);
+    duracao_aux = sonar_aux.ping_median(iteracoes_aux);
+    distancia_cm_aux = duracao_aux * VELOCIDADE_SOM_2 / 2;
+    duracao_aux3 = sonar_aux3.ping_median(iteracoes_aux);
+    distancia_cm_aux3 = duracao_aux3 * VELOCIDADE_SOM_2 / 2;
+    
+    humidade_aux = dht.readHumidity();
+    temperatura_aux = dht.readTemperature();
+
+    Serial.print("Temperatura: ");
+    Serial.print(temperatura_aux);
+
+    Serial.print("Humididade: ");
+    Serial.println(humidade_aux);
+    /*
+    if (sensorValue == HIGH) { 
+        Serial.println("ON-State");
+
+        delay(500);
+    } else {
+        Serial.println("OFF-State");
+        delay(500);
+    }
+    */
+    Serial.println(distancia_cm_aux);
+    Serial.println(distancia_cm_aux3);
+    delay(500);
+  }  
+  else{
+    LigacaoBluetoothEstabelecida = false;
+    Conectar_SmartBike(); // Inicia a ligação por Bluetooth com a App
+  }
 }
 /*
 ____________________________________________________________________________ 
@@ -237,63 +322,51 @@ float validarDistancia(float distancia) {
   return distancia;
 }
 
-// Função para calcular a média de uma lista de inteiros
-float calculaMediaDistancia(int listaObjetos[], int leituras) {
-  int total = 0;
-  for (int i = 0; i < leituras; i++) {
-    total += listaObjetos[i];
-  }
-  return (float)total / leituras;
-}
-
-
-
 void tarefaHCSR04(void* parametro) {
   static float duracao;
   static float duracao3;
   static int iteracoes = 10;
 
   while (1) {
-    if (!acidenteAtivo){
-      // Calcular a distância
-      duracao = sonar.ping_median(iteracoes);
-      duracao3 = sonar3.ping_median(iteracoes);
+    if (LigacaoBluetoothEstabelecida){
+      if (!acidenteAtivo){
+        // Calcular a distância
+        duracao = sonar.ping_median(iteracoes);
+        duracao3 = sonar3.ping_median(iteracoes);
 
-      if (dhtOperacional) {
-        // Calcular a distância com base no som_cm
-        distancia_cm1 = duracao * som_cm / 2;
-        distancia_cm3 = duracao3 * som_cm / 2;
-      } else {
-        // Calcular a distância com base no VELOCIDADE_SOM_2
-        distancia_cm1 = duracao * VELOCIDADE_SOM_2 / 2;
-        distancia_cm3 = duracao3 * VELOCIDADE_SOM_2 / 2;
-      }
-      distancia_cm1 = validarDistancia(distancia_cm1);
-      distancia_cm3 = validarDistancia(distancia_cm3);
-
-      float menorDistanciaObj = min(distancia_cm1, distancia_cm3);
-
-
-      if ((menorDistanciaObj > 100) && (menorDistanciaObj < 300)){
-        if (!objetoDetetadoAnterior){
-          tempoInicial = millis();
-          objetoDetetadoAnterior = true;
-        }else{
-          if (millis() - tempoInicial >= 5000){
-              digitalWrite(BUZZER_PINO, HIGH); // Ativar o buzzer
-              vTaskDelay(pdMS_TO_TICKS(150));
-              digitalWrite(BUZZER_PINO, LOW); // Desativar o buzzer
-              objetoDetetadoAnterior = false;
-            }
+        if (dhtOperacional) {
+          // Calcular a distância com base no som_cm
+          distancia_cm1 = duracao * som_cm / 2;
+          distancia_cm3 = duracao3 * som_cm / 2;
+        } else {
+          // Calcular a distância com base no VELOCIDADE_SOM_2
+          distancia_cm1 = duracao * VELOCIDADE_SOM_2 / 2;
+          distancia_cm3 = duracao3 * VELOCIDADE_SOM_2 / 2;
         }
+        distancia_cm1 = validarDistancia(distancia_cm1);
+        distancia_cm3 = validarDistancia(distancia_cm3);
+
+        float menorDistanciaObj = min(distancia_cm1, distancia_cm3);
+
+
+        if ((menorDistanciaObj > 100) && (menorDistanciaObj < 300)){
+          if (!objetoDetetadoAnterior){
+            tempoInicial = millis();
+            objetoDetetadoAnterior = true;
+          }else{
+            if (millis() - tempoInicial >= 5000){
+                objetoDetetadoAnterior = false;
+            }
+          }
+        }
+        else{ 
+          objetoDetetadoAnterior = false;
+        }
+        // Atraso entre as mediCOes
+        vTaskDelay(pdMS_TO_TICKS(300));
+      }else {
+        vTaskSuspend(NULL); // Colocar a tarefa em standby durante a interrupção
       }
-      else{
-        objetoDetetadoAnterior = false;
-      }
-      // Atraso entre as mediCOes
-      vTaskDelay(pdMS_TO_TICKS(300));
-    }else {
-      vTaskSuspend(NULL); // Colocar a tarefa em standby durante a interrupção
     }
   }
 }
@@ -343,27 +416,29 @@ void atualizaDetecaoAcidente() {
 
 void tarefaSW520(void* parametro) {
   while (1) {
-    int sensorSW520 = digitalRead(SW520_PINO);
-    sensorSW520 = !sensorSW520;
+    if (LigacaoBluetoothEstabelecida){
+      int sensorSW520 = digitalRead(SW520_PINO);
+      sensorSW520 = !sensorSW520;
 
-     if (sensorSW520 != ultimoEstado_SW520) {
-      ultimoEstado_SW520 = sensorSW520;
-      estadoMudou_SW520 = true;
-      if (sensorSW520 == HIGH) {
+      if (sensorSW520 != ultimoEstado_SW520) {
+        ultimoEstado_SW520 = sensorSW520;
+        estadoMudou_SW520 = true;
+        if (sensorSW520 == HIGH) {
+          atualizaDetecaoAcidente();
+        }
+      }
+
+      if (sensorSW520 == HIGH && millis() - detecao_Acidente >= 10000 && estadoMudou_SW520) {
+        acionarAcaoAcidente();
+        
+        estadoMudou_SW520 = false;
+      } else if (sensorSW520 == LOW) {
+        estadoMudou_SW520 = false;
         atualizaDetecaoAcidente();
       }
-    }
 
-    if (sensorSW520 == HIGH && millis() - detecao_Acidente >= 10000 && estadoMudou_SW520) {
-      acionarAcaoAcidente();
-      
-      estadoMudou_SW520 = false;
-    } else if (sensorSW520 == LOW) {
-      estadoMudou_SW520 = false;
-      atualizaDetecaoAcidente();
+      vTaskDelay(pdMS_TO_TICKS(10)); // Pequeno atraso para evitar polling excessivo
     }
-
-    vTaskDelay(pdMS_TO_TICKS(10)); // Pequeno atraso para evitar polling excessivo
   }
 }
 
@@ -390,55 +465,60 @@ void interrupcaoAcidente() {
 //____________________________________________________________________________
 
 void tarefaBluetooth(void* parametro) {
+
   static bool ultimoEstadoBuzzer = false; 
   bool mensagemObjetoDetetado = false; // Variável para controlar o envio da mensagem de objeto a 1 metro e meio.
 
   while (1) {
-     
-    if (!acidenteAtivo) {
-      String valores = ""; 
-      float menorDistancia = min(distancia_cm1, distancia_cm3);
-      if (menorDistancia <= 20){ // Objeto detetado a menos de 1 metro (Na demo 20 cm) -> envio dos dados consecutivos da distância.
-        valores += "Distância: " + String(menorDistancia) + " cm" + "\n";
-    
+    if (LigacaoBluetoothEstabelecida){
+      if (!acidenteAtivo) {
+        String valores = ""; 
+        float menorDistancia = min(distancia_cm1, distancia_cm3);
+        if (menorDistancia <= 20){ // Objeto detetado a menos de 1 metro (Na demo 20 cm) -> envio dos dados consecutivos da distância.
+          valores += "Distância: " + String(menorDistancia) + " cm" + "\n";
+      
+        }
+
+        if (objetoDetetadoAnterior && !mensagemObjetoDetetado) { // Envio da mensagem Objeto detetado.
+          SerialBT.println("Objeto detectado a pelo menos 1 metro.");
+          mensagemObjetoDetetado = true;
+          digitalWrite(BUZZER_PINO, HIGH); // Ativar o buzzer
+          vTaskDelay(pdMS_TO_TICKS(150));
+          digitalWrite(BUZZER_PINO, LOW); // Desativar o buzzer
+        }
+
+        if (!objetoDetetadoAnterior && mensagemObjetoDetetado) { //evitar mensagens em duplicado
+          mensagemObjetoDetetado = false;
+        }
+
+        SerialBT.println(valores);
       }
 
-      if (objetoDetetadoAnterior && !mensagemObjetoDetetado) { // Envio da mensagem Objeto detetado.
-        SerialBT.println("Objeto detectado a pelo menos 1 metro.");
-        mensagemObjetoDetetado = true;
+      if (buzzerAtivo && !ultimoEstadoBuzzer) {
+        SerialBT.println("Acidente");
+        ultimoEstadoBuzzer = true; // Atualizar o estado do Buzzer 
+
+      } else if (!buzzerAtivo && ultimoEstadoBuzzer) {
+        digitalWrite(BUZZER_PINO, LOW); // Parar o sinal do buzzer
+        ultimoEstadoBuzzer = false; // Atualizar o estado anterior
       }
 
-      if (!objetoDetetadoAnterior && mensagemObjetoDetetado) { //evitar mensagens em duplicado
-        mensagemObjetoDetetado = false;
-      }
-
-      SerialBT.println(valores);
-    }
-
-    if (buzzerAtivo && !ultimoEstadoBuzzer) {
-      SerialBT.println("Acidente");
-      ultimoEstadoBuzzer = true; // Atualizar o estado do Buzzer 
-
-    } else if (!buzzerAtivo && ultimoEstadoBuzzer) {
-      digitalWrite(BUZZER_PINO, LOW); // Parar o sinal do buzzer
-      ultimoEstadoBuzzer = false; // Atualizar o estado anterior
-    }
-
-    if (SerialBT.available()) {
-      String mensagem = SerialBT.readString();
-      mensagem.trim();
-      if (mensagem == "stop") {
-        if (permitirAcidente) {
-          acidenteAtivo = false;
-          buzzerAtivo = false;
-          digitalWrite(BUZZER_PINO, LOW);
-          atualizaDetecaoAcidente();
-          vTaskResume(tarefaHCSR04Handle);
-          vTaskResume(tarefaDHT11Handle);
-          permitirAcidente = true; // Permitir novo acionamento do acidente
+      if (SerialBT.available()) {
+        String mensagem = SerialBT.readString();
+        mensagem.trim();
+        if (mensagem == "stop") {
+          if (permitirAcidente) {
+            acidenteAtivo = false;
+            buzzerAtivo = false;
+            digitalWrite(BUZZER_PINO, LOW);
+            atualizaDetecaoAcidente();
+            vTaskResume(tarefaHCSR04Handle);
+            vTaskResume(tarefaDHT11Handle);
+            permitirAcidente = true; // Permitir novo acionamento do acidente
+          }
         }
       }
+      vTaskDelay(pdMS_TO_TICKS(200));  // Atraso entre as mensagens
     }
-    vTaskDelay(pdMS_TO_TICKS(200));  // Atraso entre as mensagens
   }
 }
